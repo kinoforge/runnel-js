@@ -8,6 +8,8 @@ Needs Node 22.12 or later and Runnel 0.0.4 or later. The package is ESM; `requir
 npm install @kinoforge/runnel
 ```
 
+Until the first release is on npm, install it from GitHub: `npm install github:kinoforge/runnel-js`. Newer npm asks you to allow its `prepare` script, which builds it.
+
 ## Enqueue a job
 
 ```ts
