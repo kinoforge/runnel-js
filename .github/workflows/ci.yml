@@ -1,0 +1,70 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+env:
+  RUNNEL_VERSION: 0.0.4-beta.1
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+  generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run generate
+      - run: git add -N src/gen && git diff --exit-code -- src/gen
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: start runnel
+        run: |
+          docker run -d --name runnel --network host \
+            -e RUNNEL_ADDR=127.0.0.1:8700 \
+            -e RUNNEL_ADMIN_TOKEN=contract-admin-token-0123456789 \
+            -e RUNNEL_SERVER_MIN_LEASE=1s \
+            -e RUNNEL_SERVER_ALLOW_HTTP_CALLBACKS=true \
+            -e RUNNEL_CALLBACKS_ALLOW_PRIVATE=true \
+            ghcr.io/kinoforge/runnel:${RUNNEL_VERSION}
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8700/healthz && break; sleep 1; done
+      - run: npm run test:contract
+        env:
+          RUNNEL_URL: http://127.0.0.1:8700
+      - if: failure()
+        run: docker logs runnel

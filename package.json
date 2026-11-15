@@ -1,0 +1,53 @@
+{
+  "name": "@kinoforge/runnel",
+  "version": "0.1.0-beta.1",
+  "description": "TypeScript and Node client and worker for Runnel, the job queue",
+  "license": "Apache-2.0",
+  "author": "mani404-dev <oss@kinoforge.dev>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinoforge/runnel-js.git"
+  },
+  "homepage": "https://github.com/kinoforge/runnel-js#readme",
+  "keywords": ["runnel", "job queue", "background jobs", "worker", "grpc", "connect"],
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./rpc": {
+      "types": "./dist/rpc.d.ts",
+      "default": "./dist/rpc.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "sideEffects": false,
+  "scripts": {
+    "generate": "buf generate",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run test/unit",
+    "test:contract": "vitest run test/contract",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.16.0",
+    "@connectrpc/connect": "2.3.0",
+    "@connectrpc/connect-node": "2.3.0"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "1.74.0",
+    "@bufbuild/protoc-gen-es": "2.16.0",
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "eslint": "10.14.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "5.0.5"
+  }
+}

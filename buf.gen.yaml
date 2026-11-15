@@ -1,0 +1,12 @@
+version: v2
+inputs:
+  - git_repo: https://github.com/kinoforge/runnel.git
+    tag: v0.0.4-beta.1
+    subdir: proto
+plugins:
+  - local: protoc-gen-es
+    out: src/gen
+    opt:
+      - target=ts
+      - import_extension=js
+clean: true
