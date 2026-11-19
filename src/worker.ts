@@ -67,6 +67,7 @@ export class Worker {
   #feed: Feed | undefined;
   #stopping = false;
   #beating = false;
+  #beatDue = false;
 
   constructor(client: Client, o: WorkerOptions) {
     this.#client = client;
@@ -176,7 +177,9 @@ export class Worker {
     const r: Run = { pb, job: new Job(pb), abort: new AbortController(), lost: false, done: Promise.resolve(), leaseMs: until - now, leaseUntil: until };
     this.#running.set(pb.id, r);
     r.done = this.#execute(r).finally(() => {
-      this.#running.delete(pb.id);
+      if (this.#running.get(pb.id) === r) {
+        this.#running.delete(pb.id);
+      }
       this.#feed?.grant(1);
     });
   }
@@ -293,6 +296,7 @@ export class Worker {
 
   async #heartbeat(): Promise<void> {
     if (this.#beating) {
+      this.#beatDue = true;
       return;
     }
     const sent = new Map(this.#running);
@@ -325,6 +329,10 @@ export class Worker {
       if (now >= r.leaseUntil) {
         this.#lose(id, r);
       }
+    }
+    if (this.#beatDue) {
+      this.#beatDue = false;
+      void this.#heartbeat();
     }
   }
 

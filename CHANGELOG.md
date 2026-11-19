@@ -4,6 +4,12 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- A heartbeat that is still running when the next one is due is followed by another at once, as in the Go worker. Before, the next beat was skipped, so one slow `Extend` could lose every running job's lease.
+- When a job comes back to the same worker while its earlier run is still ending, the earlier run no longer removes the new one, which kept its heartbeats.
+- A zero server time is ignored instead of moving the server clock to 1970.
+
 ## [0.1.0-beta.1] - 2026-11-15
 
 ### Added

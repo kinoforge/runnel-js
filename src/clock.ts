@@ -8,7 +8,7 @@ export class ServerClock {
   constructor(readonly local: Now = Date.now) {}
 
   observe(server: Timestamp | undefined): void {
-    if (server) {
+    if (server && (server.seconds !== 0n || server.nanos !== 0)) {
       this.#offset = timestampMs(server) - this.local();
     }
   }
