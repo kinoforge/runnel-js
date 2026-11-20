@@ -191,6 +191,10 @@ export class Worker {
     const granted = until - now;
     const leaseMs = granted > 0 ? Math.min(this.#o.leaseMs, granted) : this.#o.leaseMs;
     const r: Run = { pb, job: new Job(pb), abort: new AbortController(), lost: false, done: Promise.resolve(), leaseMs, leaseUntil: until };
+    const old = this.#running.get(pb.id);
+    if (old) {
+      this.#lose(pb.id, old);
+    }
     this.#running.set(pb.id, r);
     r.done = this.#execute(r).finally(() => {
       if (this.#running.get(pb.id) === r) {

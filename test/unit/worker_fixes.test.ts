@@ -24,15 +24,23 @@ function untilAborted(signal: AbortSignal | undefined): Promise<never> {
   });
 }
 
-function fake(jobs: PbJob[], extend: (n: number) => Promise<string[]>): { client: Client; finished: Finished[] } {
+function fake(
+  jobs: PbJob[],
+  extend: (n: number) => Promise<string[]>,
+  again?: { jobs: PbJob[]; after: Promise<void> },
+): { client: Client; finished: Finished[] } {
   const finished: Finished[] = [];
-  let claimed = false;
+  let claims = 0;
   let beats = 0;
   const workers = {
     claim: async (_: unknown, o: { signal?: AbortSignal }) => {
-      if (!claimed) {
-        claimed = true;
+      claims++;
+      if (claims === 1) {
         return { jobs };
+      }
+      if (claims === 2 && again) {
+        await again.after;
+        return { jobs: again.jobs };
       }
       return await untilAborted(o.signal);
     },
@@ -92,6 +100,37 @@ describe("worker fixes", () => {
     w.stop();
     await ran;
     expect(finished[0]?.kind).toBe(OutcomeKind.RETRY);
+  });
+
+  it("ends the run that still held a job when the job is handed out again", async () => {
+    const first = create(JobSchema, { id: "j1", kind: "k", queue: "q", version: 1n });
+    const again = create(JobSchema, { id: "j1", kind: "k", queue: "q", version: 2n });
+    let started = (): void => undefined;
+    const after = new Promise<void>((r) => {
+      started = r;
+    });
+    const { client, finished } = fake([first], () => Promise.resolve([]), { jobs: [again], after });
+    const w = new Worker(client, { queues: ["q"], mode: "poll", shutdownTimeoutMs: 100, logger: quiet });
+    let calls = 0;
+    let reason: unknown;
+    w.handle("k", async (_, ctx) => {
+      calls++;
+      if (calls > 1) {
+        return "second";
+      }
+      started();
+      await untilAborted(ctx.signal).catch(() => {
+        reason = ctx.signal.reason;
+      });
+      return "first";
+    });
+    const ran = w.run();
+    await until("the second run to finish", 3000, () => finished.length > 0);
+    await until("the first run to end", 3000, () => reason !== undefined);
+    w.stop();
+    await ran;
+    expect(reason).toBeInstanceOf(LeaseLostError);
+    expect(finished.map((f) => f.kind)).toEqual([OutcomeKind.DONE]);
   });
 
   it("stops an idle poll worker without waiting for its long poll", async () => {
