@@ -63,10 +63,12 @@ export class Worker {
   readonly #log: Logger;
   readonly #handlers = new Map<string, Handlers>();
   readonly #running = new Map<string, Run>();
+  readonly #releasing = new Set<Promise<void>>();
   readonly #stop = new AbortController();
   #feed: Feed | undefined;
   #stopping = false;
-  #beating = false;
+  #beatStopped = false;
+  #beating: Promise<void> | undefined;
   #beatDue = false;
 
   constructor(client: Client, o: WorkerOptions) {
@@ -106,6 +108,9 @@ export class Worker {
     if (this.#o.queues.length === 0 || this.#handlers.size === 0) {
       throw new Error("runnel: a worker needs queues and handlers");
     }
+    if (this.#o.concurrency <= 0 || this.#o.leaseMs <= 0) {
+      throw new Error("runnel: concurrency and leaseMs must be positive");
+    }
     const o = this.#o;
     const config = {
       client: this.#client,
@@ -123,24 +128,30 @@ export class Worker {
     };
     const feed: Feed = o.mode === "poll" ? new PollFeed(config) : new StreamFeed(config);
     this.#feed = feed;
+    this.#beatStopped = false;
     const beat = setInterval(() => void this.#heartbeat(), o.leaseMs / 3);
-    const fed = feed.run();
-    await this.#untilStopped(signal);
-    this.#stopping = true;
-    feed.stop();
-    const drained = (): Promise<unknown> => Promise.all([...this.#running.values()].map((r) => r.done));
-    if (!(await this.#within(drained(), o.shutdownTimeoutMs))) {
-      for (const r of this.#running.values()) {
-        r.abort.abort(new ShutdownError());
+    try {
+      const fed = feed.run();
+      await this.#untilStopped(signal);
+      this.#stopping = true;
+      feed.stop();
+      const drained = (): Promise<unknown> => Promise.all([...[...this.#running.values()].map((r) => r.done), ...this.#releasing]);
+      if (!(await this.#within(drained(), o.shutdownTimeoutMs))) {
+        for (const r of this.#running.values()) {
+          r.abort.abort(new ShutdownError());
+        }
+        await drained();
+      }
+      if (!(await this.#within(fed, o.shutdownTimeoutMs))) {
+        feed.abort();
+        await fed;
       }
       await drained();
+    } finally {
+      this.#beatStopped = true;
+      clearInterval(beat);
+      await this.#beating;
     }
-    if (!(await this.#within(fed, o.shutdownTimeoutMs))) {
-      feed.abort();
-      await fed;
-    }
-    await drained();
-    clearInterval(beat);
   }
 
   async #within(p: Promise<unknown>, ms: number): Promise<boolean> {
@@ -169,12 +180,17 @@ export class Worker {
 
   #deliver(pb: PbJob): void {
     if (this.#stopping) {
-      void this.#finish(pb, release());
+      const p = this.#finish(pb, release()).finally(() => {
+        this.#releasing.delete(p);
+      });
+      this.#releasing.add(p);
       return;
     }
     const now = this.#client.clock.now();
     const until = pb.leaseUntil ? timestampMs(pb.leaseUntil) : now + this.#o.leaseMs;
-    const r: Run = { pb, job: new Job(pb), abort: new AbortController(), lost: false, done: Promise.resolve(), leaseMs: until - now, leaseUntil: until };
+    const granted = until - now;
+    const leaseMs = granted > 0 ? Math.min(this.#o.leaseMs, granted) : this.#o.leaseMs;
+    const r: Run = { pb, job: new Job(pb), abort: new AbortController(), lost: false, done: Promise.resolve(), leaseMs, leaseUntil: until };
     this.#running.set(pb.id, r);
     r.done = this.#execute(r).finally(() => {
       if (this.#running.get(pb.id) === r) {
@@ -229,13 +245,17 @@ export class Worker {
         throw fail(`kind "${job.kind}" has a handle but no poller`);
       }
       const value: unknown = await fn(job, ctx);
+      const aborted = this.#abortedOutcome(r.abort.signal.reason);
+      if (aborted) {
+        return aborted;
+      }
       return value instanceof Control ? value.outcome : done(value);
     } catch (err) {
       return this.#classify(err, r.abort.signal.reason);
     }
   }
 
-  #classify(err: unknown, reason: unknown): Outcome {
+  #abortedOutcome(reason: unknown): Outcome | undefined {
     if (reason instanceof ShutdownError) {
       return release();
     }
@@ -245,7 +265,11 @@ export class Worker {
     if (reason instanceof DeadlineError) {
       return fail("deadline passed").outcome;
     }
-    return err instanceof Control ? err.outcome : retry(err);
+    return undefined;
+  }
+
+  #classify(err: unknown, reason: unknown): Outcome {
+    return this.#abortedOutcome(reason) ?? (err instanceof Control ? err.outcome : retry(err));
   }
 
   async #execute(r: Run): Promise<void> {
@@ -294,16 +318,30 @@ export class Worker {
     }
   }
 
-  async #heartbeat(): Promise<void> {
+  #heartbeat(): Promise<void> {
+    if (this.#beatStopped) {
+      return Promise.resolve();
+    }
     if (this.#beating) {
       this.#beatDue = true;
-      return;
+      return this.#beating;
     }
+    const p = this.#beatOnce().finally(() => {
+      this.#beating = undefined;
+      if (this.#beatDue && !this.#beatStopped) {
+        this.#beatDue = false;
+        void this.#heartbeat();
+      }
+    });
+    this.#beating = p;
+    return p;
+  }
+
+  async #beatOnce(): Promise<void> {
     const sent = new Map(this.#running);
     if (sent.size === 0) {
       return;
     }
-    this.#beating = true;
     try {
       const res = await this.#client.rpc.workers.extend(
         { namespace: this.#client.namespace, worker: this.id, ids: [...sent.keys()], lease: durationFromMs(this.#o.leaseMs) },
@@ -321,18 +359,12 @@ export class Worker {
       }
     } catch (err) {
       this.#log.error("runnel: heartbeat failed", toRunnelError(err).message);
-    } finally {
-      this.#beating = false;
     }
     const now = this.#client.clock.now();
     for (const [id, r] of sent) {
       if (now >= r.leaseUntil) {
         this.#lose(id, r);
       }
-    }
-    if (this.#beatDue) {
-      this.#beatDue = false;
-      void this.#heartbeat();
     }
   }
 

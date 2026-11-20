@@ -8,7 +8,8 @@ export type JobState = "blocked" | "waiting" | "running" | "polling" | "complete
 const finalStates: ReadonlySet<JobState> = new Set(["completed", "dead", "cancelled", "expired"]);
 
 export function jobState(s: State): JobState {
-  return State[s].toLowerCase() as JobState;
+  const name = State[s];
+  return (name ? name.toLowerCase() : "unknown") as JobState;
 }
 
 export function pbState(s: JobState): State {

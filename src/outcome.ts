@@ -22,7 +22,18 @@ function message(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
   }
-  return typeof err === "string" ? err : JSON.stringify(err);
+  if (typeof err === "string") {
+    return err;
+  }
+  if (typeof err === "bigint" || typeof err === "number" || typeof err === "boolean" || typeof err === "symbol") {
+    return String(err);
+  }
+  try {
+    const json = JSON.stringify(err) as string | undefined;
+    return json ?? Object.prototype.toString.call(err);
+  } catch {
+    return Object.prototype.toString.call(err);
+  }
 }
 
 export function fail(err: unknown): Control {

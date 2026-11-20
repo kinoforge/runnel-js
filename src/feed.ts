@@ -56,6 +56,7 @@ function credit(n: number): WorkRequest {
 export class StreamFeed implements Feed {
   #pipe: Pipe<WorkRequest> | undefined;
   #stopped = false;
+  readonly #stopSignal = new AbortController();
   readonly #abort = new AbortController();
 
   constructor(private readonly c: FeedConfig) {}
@@ -92,7 +93,7 @@ export class StreamFeed implements Feed {
         pipe.close();
       }
       if (!this.stopped()) {
-        await backoff.wait(this.#abort.signal);
+        await backoff.wait(this.#stopSignal.signal);
       }
     }
   }
@@ -109,6 +110,7 @@ export class StreamFeed implements Feed {
 
   stop(): void {
     this.#stopped = true;
+    this.#stopSignal.abort();
     this.#pipe?.close();
   }
 
@@ -175,6 +177,7 @@ export class PollFeed implements Feed {
 
   stop(): void {
     this.#stopped = true;
+    this.#abort.abort();
     this.grant();
   }
 
